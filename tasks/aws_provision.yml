@@ -1,0 +1,73 @@
+---
+
+
+## TODO: Add SG with rules for consul
+## 8300 (T) Consul server
+## 8301 (T/U) Consul LAN serf
+## 8302 (T/U) Consul WAN serf
+## 8500 (T) Consul http API
+## 8501 (T?) Consult https API
+## 8600 (T/U) Consul DNS 
+## 8200 for Vault eventually
+
+- name: Discover AMI ID
+  ec2_ami_info:
+    owners: "{{ consul_ami_owner }}"
+    filters:
+      name: "{{ consul_ami_name_filter }}"
+  register: amazon_amis
+
+- name: Set ami variable
+  set_fact:
+    consul_ami: "{{ amazon_amis.images | selectattr('name', 'defined') | sort(attribute='creation_date') | last }}"
+
+
+## TODO: Add 'group:' for security group
+## I am using a list of clusters, so we can
+## spin up primary, recovery, performance clusters
+## Maybe it's unnecessary, but it should allow
+## us to relate/connect them all even with ephemeral IPs.
+## We'll see how it goes.
+## It definitely complicates looping through the results from ec2.
+- name: "Ensure provisioned hosts for each cluster"
+  ec2:
+    key_name: '{{ consul_ssh_key }}'
+    region: '{{ consul_cluster_region }}'
+    instance_type: '{{ consul_instance_type }}'
+    image: '{{ consul_ami.image_id }}'
+    wait: true
+    exact_count: '{{ consul_cluster_count }}'
+    count_tag: '{{ consul_cluster_tags }}'
+    instance_tags: '{{ consul_cluster_tags }}'
+  register: consul_hosts
+
+## Looping is tricky here because consul_cluster is a list
+- name: print consul_hosts var
+  debug:
+    msg: "{{ item.id }}" 
+  loop: "{{ consul_hosts.tagged_instances }}"
+
+## Looping is tricky here because consul_cluster is a list
+- name: print consul_hosts IPs
+  debug:
+    msg: 'System IP is {{ item.public_ip }} and cluster_name is {{ consul_cluster_name }}'
+  loop: "{{ consul_hosts.tagged_instances }}"
+
+- name: Wait for connection
+  wait_for_connection:
+    delay: 0
+    timeout: 180
+  delegate_to: "{{ item.public_dns_name }}"
+  loop: "{{ consul_hosts.tagged_instances }}" 
+
+- name: Add public ips to an inventory group
+  add_host: 
+    group: consul_aws_temp
+    name: '{{ item.public_ip }}'
+  loop: "{{ consul_hosts.tagged_instances }}"
+
+- name: Add private ips to an inventory group
+  add_host: 
+    group: consul_aws_private
+    name: '{{ item.private_ip }}'
+  loop: "{{ consul_hosts.tagged_instances }}"
